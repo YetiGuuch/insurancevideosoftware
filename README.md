@@ -1,30 +1,50 @@
 # Video Activity Review
 
-Choose a recording, analyze it, and download a plain-text report. The local
-vision model looks for visible lifting, carrying, walking, bending, and other
-human activity. Each timestamp opens the corresponding segment in the video.
+Turn recorded video into timestamped draft notes about visible activity such
+as lifting, carrying, walking, and bending. The app analyzes sampled frames
+locally and exports a plain-text report.
 
-## First-time setup on Windows
+## Run on 64-bit Windows 10 or 11
 
-1. Install [Node.js 22 or newer](https://nodejs.org/en/download) and
-   [Ollama for Windows](https://ollama.com/download/windows).
-2. Open a new PowerShell window and run `ollama pull qwen3-vl:4b`.
-   The model download is approximately 3.3 GB.
-3. Keep the app files together. Double-click `Start.cmd` and open
-   [Video Activity Review](http://127.0.0.1:8765) in Edge or Chrome.
-4. Choose a short H.264 MP4, select **Analyze video**, then
-   **Download text report**. Keep the page open during analysis.
+1. Double-click `VideoActivityReview.exe`. The review interface opens in your
+   browser. Keep the launcher window open.
+2. Choose a local recording. An H.264 MP4 is a good starting point.
+3. Optionally describe the person's top or jacket, pants or shorts, shoes,
+   hat, or an accessory. Leave unknown details blank.
+4. Select **Analyze video**. On the first run, select **Download analysis
+   engine** when prompted. The app downloads about 5 GB of engine and model
+   files. This requires Internet access and several additional GB for
+   extraction. Once setup finishes, select **Analyze video** again.
+5. Select a timestamp to review the source segment, then choose
+   **Download text report** to save your notes.
 
-The model runs on your computer. The app reads the source video in the browser
-and sends sampled images to Ollama on the same computer. The source file stays
-in place. The browser keeps notes in memory until you download them or close
-the page. To end a run early, select **Stop** and download the completed
-segments.
+The executable includes the app and Node runtime. It uses your existing
+browser and downloads the portable Ollama engine and model into
+`%LOCALAPPDATA%\VideoActivityReview`. There are no separate installers or
+accounts. Subsequent analyses run locally, including when offline. The source
+video stays on your computer.
 
-## How to read the report
+## Read the results
 
-Each row covers up to eight seconds sampled at nine evenly spaced points.
-Times are elapsed playback times. Brief actions, small objects, obstructions,
-and camera changes can cause errors. Use the timestamp buttons to verify the
-draft observations against the footage. Start with a short clip containing
-known actions to check speed and accuracy on your computer.
+Clothing cues help the model focus on a plausible match within each segment.
+Similar outfits, changes in clothing, obstacles, or poor image quality can
+make attribution uncertain. Review segments marked as uncertain and verify
+possible matches against the source. With no cues, the app describes general
+human activity. The text export lists all completed segments, including those
+with no visible match or action. Select **Stop** to keep a partial report.
+
+Each segment covers up to eight seconds and uses nine sampled frames. Brief
+actions can be missed. Times are elapsed playback times. Processing speed
+depends on your hardware and footage.
+
+## Build from source
+
+On Windows x64, download the official Windows x64 ZIP for Node.js and extract
+it. Pass the folder containing `node.exe` and its `LICENSE` to the build script.
+
+```powershell
+.\build-windows.ps1 -NodeDirectory C:\path\to\node
+```
+
+The script uses the .NET Framework compiler included with Windows to embed
+the Windows launcher, local review app, and Node runtime into a single EXE.

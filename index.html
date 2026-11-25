@@ -15,6 +15,11 @@ section { background: #fff; border-radius: 16px; border: 1px solid #ccd9d2; padd
 h2 { font-size: 1.15rem; margin: 0 0 16px; }
 label { display: block; font-weight: 600; margin-bottom: 8px; }
 input { max-width: 100%; }
+fieldset { border: 1px solid #ccd9d2; border-radius: 8px; padding: 12px; margin: 16px 0 0; }
+legend { padding: 0 5px; font-weight: 600; }
+.hints { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hints label { font-size: .88rem; }
+.hints input { display: block; width: 100%; margin-top: 4px; border: 1px solid #a6bbb0; border-radius: 6px; padding: 7px; font: inherit; }
 video { width: 100%; max-height: 420px; background: #172624; border-radius: 8px; margin-top: 16px; }
 [hidden] { display: none !important; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
@@ -39,10 +44,20 @@ progress { width: 100%; accent-color: #17583f; }
       <h2 id="source-title">Source video</h2>
       <label for="source">Choose a recording</label>
       <input type="file" accept="video/*,.mkv,.avi" id="source">
+      <fieldset id="clothing">
+        <legend>What was the person wearing?</legend>
+        <p class="muted">Optional. Describe visible clothing. Leave unknown details blank.</p>
+        <div class="hints">
+          <label>Top or jacket<input id="top" type="text" maxlength="120" placeholder="e.g. red rain jacket"></label>
+          <label>Pants or shorts<input id="bottom" type="text" maxlength="120" placeholder="e.g. dark jeans"></label>
+          <label>Shoes<input id="shoes" type="text" maxlength="120" placeholder="e.g. white sneakers"></label>
+          <label>Hat or accessory<input id="accessory" type="text" maxlength="120" placeholder="e.g. black cap"></label>
+        </div>
+      </fieldset>
       <video id="player" controls preload="metadata" hidden></video>
       <div class="actions">
         <button class="primary" id="analyze" disabled>Analyze video</button>
-        <button id="stop" disabled>Stop</button>
+        <button id="stop" disabled>Stop</button><button id="setup" hidden>Download analysis engine</button>
       </div>
       <p id="status" role="status">Choose a browser-playable video, such as an H.264 MP4.</p>
       <progress id="progress" value="0" max="1" aria-label="Analysis progress" hidden></progress>
@@ -51,13 +66,18 @@ progress { width: 100%; accent-color: #17583f; }
       <h2 id="notes-title">Activity notes</h2>
       <p class="muted">Verify observations against the source footage. Select a timestamp to jump to that segment.</p>
       <p id="empty" class="muted">Observations appear here as the video is analyzed.</p>
-      <ol id="entries"></ol>
+      <label class="muted"><input type="checkbox" id="showQuiet"> Show segments without a clear action</label><ol id="entries"></ol>
       <div class="actions"><button id="download" disabled>Download text report</button></div>
     </section>
   </div>
 </main>
 <script>
 const source = document.querySelector('#source');
+const clothing = document.querySelector('#clothing');
+const setup = document.querySelector('#setup');
+const hintFields = ['top', 'bottom', 'shoes', 'accessory'];
+const hintLabels = {top: 'Top', bottom: 'Bottom', shoes: 'Shoes', accessory: 'Accessory'};
+let hints = {};
 const player = document.querySelector('#player');
 const analyze = document.querySelector('#analyze');
 const stop = document.querySelector('#stop');
@@ -65,6 +85,7 @@ const download = document.querySelector('#download');
 const status = document.querySelector('#status');
 const progress = document.querySelector('#progress');
 const entries = document.querySelector('#entries');
+const showQuiet = document.querySelector('#showQuiet');
 const empty = document.querySelector('#empty');
 
 const segmentLength = 8;
@@ -72,8 +93,10 @@ const frameCount = 9;
 let url;
 let run;
 let rows = [];
+let visibleNotes = 0;
 let completion = '';
 let model = '';
+let setupInProgress = false;
 
 function timestamp(seconds) {
   const milliseconds = Math.round(seconds * 1000);
@@ -86,10 +109,11 @@ function timestamp(seconds) {
 
 function reset() {
   rows = [];
+  visibleNotes = 0;
   model = '';
   completion = '';
   entries.replaceChildren();
-  empty.hidden = false;
+  updateEmptyNotes();
   download.disabled = true;
   progress.hidden = true;
   progress.value = 0;
@@ -110,7 +134,7 @@ source.addEventListener('change', () => {
 
 player.addEventListener('loadedmetadata', () => {
   const playable = Number.isFinite(player.duration) && player.duration > 0 && player.videoWidth > 0;
-  analyze.disabled = !playable;
+  analyze.disabled = !playable || setupInProgress;
   status.textContent = playable ? 'Ready to analyze. Duration ' + timestamp(player.duration) + '.' :
     'This file has no playable video track with a known duration.';
 });
@@ -166,20 +190,42 @@ async function frameSheet(video, start, end, canvas, signal) {
 }
 
 async function call(path, signal, body) {
-  const response = await fetch(path, {method: 'POST', body, signal});
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body), signal});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error);
   return result;
 }
 
+function updateEmptyNotes() {
+  empty.hidden = visibleNotes > 0;
+  empty.textContent = rows.length ? 'No activity or uncertain segments to show so far.' :
+    'Observations appear here as the video is analyzed.';
+}
+
+function applyVisibility(item) {
+  item.hidden = item.dataset.quiet === 'true' && !showQuiet.checked;
+  if (!item.hidden) visibleNotes++;
+}
+
+showQuiet.addEventListener('change', () => {
+  visibleNotes = 0;
+  for (const item of entries.children) applyVisibility(item);
+  updateEmptyNotes();
+});
+
 function addObservation(start, end, result) {
   const descriptions = result.events.map(event => event.label + ' — ' + event.description.replace(/\s+/g, ' ').trim());
   if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
   if (result.state === 'none_visible') descriptions.push('No human activity visible in sampled frames.');
+  if (result.state === 'no_match') descriptions.push('No clothing match visible in sampled frames.');
+  if (result.state === 'match_inactive') descriptions.push('Possible clothing match. No clear activity visible.');
+  if (result.state === 'match_unclear') descriptions.push('Clothing match unclear. Review this segment.');
+  if (result.state === 'activity' && Object.keys(hints).length) descriptions.unshift('Possible clothing match.');
   const range = timestamp(start) + '–' + timestamp(end);
   rows.push({range, descriptions});
 
   const item = document.createElement('li');
+  item.dataset.quiet = String(['none_visible', 'no_match', 'match_inactive'].includes(result.state));
   const jump = document.createElement('button');
   jump.className = 'time';
   jump.textContent = range;
@@ -190,8 +236,9 @@ function addObservation(start, end, result) {
     paragraph.textContent = description;
     item.append(paragraph);
   }
-  empty.hidden = true;
+  applyVisibility(item);
   entries.append(item);
+  updateEmptyNotes();
   download.disabled = false;
 }
 
@@ -199,7 +246,9 @@ analyze.addEventListener('click', async () => {
   reset();
   run = new AbortController();
   const {signal} = run;
+  hints = Object.fromEntries(hintFields.map(key => [key, document.getElementById(key).value.trim()]).filter(([, value]) => value));
   source.disabled = true;
+  clothing.disabled = true;
   analyze.disabled = true;
   stop.disabled = false;
   const duration = player.duration;
@@ -211,7 +260,13 @@ analyze.addEventListener('click', async () => {
 
   try {
     status.textContent = 'Checking the local vision model…';
-    ({model} = await call('/ready', signal));
+    const readiness = await call('/ready', signal);
+    if (!readiness.ready) {
+      status.textContent = readiness.message;
+      setup.hidden = false;
+      return;
+    }
+    model = readiness.model;
     sampler.muted = true;
     sampler.preload = 'auto';
     status.textContent = 'Loading frames…';
@@ -238,7 +293,7 @@ analyze.addEventListener('click', async () => {
       const end = Math.min(start + segmentLength, duration);
       status.textContent = 'Analyzing segment ' + (index + 1) + ' of ' + total + ' (' + timestamp(start) + '–' + timestamp(end) + ')…';
       const image = await frameSheet(sampler, start, end, canvas, signal);
-      const result = await call('/analyze', signal, image);
+      const result = await call('/analyze', signal, {image, hints});
       addObservation(start, end, result);
       progress.value = index + 1;
     }
@@ -252,6 +307,7 @@ analyze.addEventListener('click', async () => {
     sampler.removeAttribute('src');
     sampler.load();
     source.disabled = false;
+    clothing.disabled = false;
     analyze.disabled = Boolean(player.error);
     stop.disabled = true;
     run = undefined;
@@ -260,6 +316,31 @@ analyze.addEventListener('click', async () => {
 
 stop.addEventListener('click', () => run?.abort());
 
+setup.addEventListener('click', async () => {
+  setupInProgress = true;
+  setup.disabled = true;
+  analyze.disabled = true;
+  source.disabled = true;
+  try {
+    let state = await call('/setup');
+    while (state.running) {
+      status.textContent = state.message;
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      state = await call('/setup-status');
+    }
+    if (!state.ready) throw new Error(state.message);
+    setup.hidden = true;
+    status.textContent = 'Analysis engine ready. Select Analyze video to begin.';
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    setupInProgress = false;
+    setup.disabled = false;
+    source.disabled = false;
+    analyze.disabled = player.readyState < 1 || Boolean(player.error);
+  }
+});
+
 download.addEventListener('click', () => {
   const name = source.files[0].name.replace(/[\r\n]/g, ' ');
   const header = [
@@ -267,6 +348,7 @@ download.addEventListener('click', () => {
     'Source file: ' + name,
     'Source duration: ' + timestamp(player.duration),
     'Model: ' + model,
+    'Clothing cues: ' + (Object.entries(hints).map(([key, value]) => hintLabels[key] + '=' + value.replace(/\s+/g, ' ')).join(', ') || 'None supplied'),
     'Analysis: ' + (completion || 'In progress') + ' (' + rows.length + ' of ' + progress.max + ' segments)',
     'Method: Nine sampled frames per segment of up to eight seconds. Timestamps are relative to playback.',
     'Automated draft. Verify observations against the source footage. Brief or obscured actions can be missed.'
@@ -282,4 +364,3 @@ download.addEventListener('click', () => {
 });
 </script>
 </html>
-
