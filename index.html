@@ -215,11 +215,12 @@ showQuiet.addEventListener('change', () => {
 
 function addObservation(start, end, result) {
   const descriptions = result.events.map(event => event.label + ' — ' + event.description.replace(/\s+/g, ' ').trim());
-  if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
+  if (result.modelUnclear) descriptions.push('The model could not produce a usable observation. Review this segment.');
+  else if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
   if (result.state === 'none_visible') descriptions.push('No human activity visible in sampled frames.');
   if (result.state === 'no_match') descriptions.push('No clothing match visible in sampled frames.');
   if (result.state === 'match_inactive') descriptions.push('Possible clothing match. No clear activity visible.');
-  if (result.state === 'match_unclear') descriptions.push('Clothing match unclear. Review this segment.');
+  if (!result.modelUnclear && result.state === 'match_unclear') descriptions.push('Clothing match unclear. Review this segment.');
   if (result.state === 'activity' && Object.keys(hints).length) descriptions.unshift('Possible clothing match.');
   const range = timestamp(start) + '–' + timestamp(end);
   rows.push({range, descriptions});

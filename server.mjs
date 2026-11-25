@@ -95,17 +95,20 @@ const server = createServer(async (request, response) => {
     const result = await fetch(ollama + '/api/chat', {
       method: 'POST', signal, headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model, stream: false, format, options: {temperature: 0, num_predict: 512},
+        model, stream: false, think: false, format, options: {temperature: 0, num_ctx: 4096, num_predict: 768},
         messages: [{role: 'user', content: prompt, images: [input.image]}]
       })
     });
     if (!result.ok) throw new Error('The local engine could not analyze this segment (HTTP ' + result.status + ').');
     const data = await result.json();
-    const answer = JSON.parse(data.message.content);
-    if (!states.includes(answer.state) || !Array.isArray(answer.events) ||
+    let answer;
+    try { answer = JSON.parse(data.message.content); } catch {
+      return json(response, 200, {state: focused ? 'match_unclear' : 'unclear', events: [], modelUnclear: true});
+    }
+    if (!states.includes(answer?.state) || !Array.isArray(answer.events) ||
         answer.events.some(event => !labels.includes(event?.label) || typeof event.description !== 'string' || !event.description.trim()) ||
         ((answer.state === 'activity') !== (answer.events.length > 0))) {
-      throw new Error('The vision model returned an invalid observation.');
+      return json(response, 200, {state: focused ? 'match_unclear' : 'unclear', events: [], modelUnclear: true});
     }
     return json(response, 200, answer);
   } catch (error) {
