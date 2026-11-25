@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Activity Review</title>
+<style>
+:root { color-scheme: light; font: 16px system-ui, sans-serif; color: #142b29; background: #eef3f0; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(1100px, 100% - 40px); margin: 48px auto; }
+h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: -.055em; }
+header p { color: #425853; margin: 10px 0 28px; }
+.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+section { background: #fff; border-radius: 16px; border: 1px solid #ccd9d2; padding: 20px; min-width: 0; }
+h2 { font-size: 1.15rem; margin: 0 0 16px; }
+label { display: block; font-weight: 600; margin-bottom: 8px; }
+input { max-width: 100%; }
+video { width: 100%; max-height: 420px; background: #172624; border-radius: 8px; margin-top: 16px; }
+[hidden] { display: none !important; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+button { border: 1px solid #a6bbb0; background: white; color: #17392f; border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; }
+button.primary { background: #17583f; border-color: #17583f; color: white; }
+button:disabled { opacity: .5; cursor: default; }
+progress { width: 100%; accent-color: #17583f; }
+#status, .muted { color: #425853; font-size: .9rem; }
+#entries { list-style: none; margin: 0; padding: 0; overflow-wrap: anywhere; }
+#entries li { border-top: 1px solid #dce5e0; padding: 12px 0; }
+#entries p { margin: 8px 0 0; }
+.time { font-variant-numeric: tabular-nums; font-size: .88rem; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } main { margin: 28px auto; } }
+</style>
+<main>
+  <header>
+    <h1>Video Activity Review</h1>
+    <p>Find moments to review and export timestamped observations.</p>
+  </header>
+  <div class="layout">
+    <section aria-labelledby="source-title">
+      <h2 id="source-title">Source video</h2>
+      <label for="source">Choose a recording</label>
+      <input type="file" accept="video/*,.mkv,.avi" id="source">
+      <video id="player" controls preload="metadata" hidden></video>
+      <div class="actions">
+        <button class="primary" id="analyze" disabled>Analyze video</button>
+        <button id="stop" disabled>Stop</button>
+      </div>
+      <p id="status" role="status">Choose a browser-playable video, such as an H.264 MP4.</p>
+      <progress id="progress" value="0" max="1" aria-label="Analysis progress" hidden></progress>
+    </section>
+    <section aria-labelledby="notes-title">
+      <h2 id="notes-title">Activity notes</h2>
+      <p class="muted">Verify observations against the source footage. Select a timestamp to jump to that segment.</p>
+      <p id="empty" class="muted">Observations appear here as the video is analyzed.</p>
+      <ol id="entries"></ol>
+      <div class="actions"><button id="download" disabled>Download text report</button></div>
+    </section>
+  </div>
+</main>
+<script>
+const source = document.querySelector('#source');
+const player = document.querySelector('#player');
+const analyze = document.querySelector('#analyze');
+const stop = document.querySelector('#stop');
+const download = document.querySelector('#download');
+const status = document.querySelector('#status');
+const progress = document.querySelector('#progress');
+const entries = document.querySelector('#entries');
+const empty = document.querySelector('#empty');
+
+const segmentLength = 8;
+const frameCount = 9;
+let url;
+let run;
+let rows = [];
+let completion = '';
+let model = '';
+
+function timestamp(seconds) {
+  const milliseconds = Math.round(seconds * 1000);
+  const whole = Math.floor(milliseconds / 1000);
+  const clock = [Math.floor(whole / 3600), Math.floor(whole / 60) % 60, whole % 60]
+    .map(value => String(value).padStart(2, '0')).join(':');
+  const fraction = milliseconds % 1000;
+  return fraction ? clock + '.' + String(fraction).padStart(3, '0') : clock;
+}
+
+function reset() {
+  rows = [];
+  model = '';
+  completion = '';
+  entries.replaceChildren();
+  empty.hidden = false;
+  download.disabled = true;
+  progress.hidden = true;
+  progress.value = 0;
+}
+
+source.addEventListener('change', () => {
+  reset();
+  analyze.disabled = true;
+  const oldUrl = url;
+  url = source.files[0] ? URL.createObjectURL(source.files[0]) : undefined;
+  player.hidden = !url;
+  if (url) player.src = url;
+  else player.removeAttribute('src');
+  player.load();
+  if (oldUrl) URL.revokeObjectURL(oldUrl);
+  status.textContent = url ? 'Loading video…' : 'Choose a recording to begin.';
+});
+
+player.addEventListener('loadedmetadata', () => {
+  const playable = Number.isFinite(player.duration) && player.duration > 0 && player.videoWidth > 0;
+  analyze.disabled = !playable;
+  status.textContent = playable ? 'Ready to analyze. Duration ' + timestamp(player.duration) + '.' :
+    'This file has no playable video track with a known duration.';
+});
+
+player.addEventListener('error', () => {
+  analyze.disabled = true;
+  status.textContent = 'The browser could not play this recording. Try an H.264 MP4.';
+});
+
+function seek(video, time, signal) {
+  signal.throwIfAborted();
+  if (video.currentTime === time && video.readyState >= 2 && !video.seeking) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener('seeked', ready);
+      video.removeEventListener('error', failed);
+      signal.removeEventListener('abort', cancelled);
+    };
+    const ready = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error('Could not decode a frame near ' + timestamp(time) + '.')); };
+    const cancelled = () => { cleanup(); reject(signal.reason); };
+    const timer = setTimeout(failed, 15000);
+    video.addEventListener('seeked', ready);
+    video.addEventListener('error', failed);
+    signal.addEventListener('abort', cancelled);
+    try {
+      video.currentTime = time;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+async function frameSheet(video, start, end, canvas, signal) {
+  const width = 384;
+  const height = 240;
+  const context = canvas.getContext('2d', {alpha: false});
+  const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+  const imageWidth = video.videoWidth * scale;
+  const imageHeight = video.videoHeight * scale;
+  context.fillStyle = '#121212';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < frameCount; index++) {
+    const time = start + (end - start) * (index + .5) / frameCount;
+    await seek(video, time, signal);
+    const x = index % 3 * width;
+    const y = Math.floor(index / 3) * height;
+    context.drawImage(video, x + (width - imageWidth) / 2, y + (height - imageHeight) / 2, imageWidth, imageHeight);
+  }
+  return canvas.toDataURL('image/jpeg', .82).split(',')[1];
+}
+
+async function call(path, signal, body) {
+  const response = await fetch(path, {method: 'POST', body, signal});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error);
+  return result;
+}
+
+function addObservation(start, end, result) {
+  const descriptions = result.events.map(event => event.label + ' — ' + event.description.replace(/\s+/g, ' ').trim());
+  if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
+  if (result.state === 'none_visible') descriptions.push('No human activity visible in sampled frames.');
+  const range = timestamp(start) + '–' + timestamp(end);
+  rows.push({range, descriptions});
+
+  const item = document.createElement('li');
+  const jump = document.createElement('button');
+  jump.className = 'time';
+  jump.textContent = range;
+  jump.addEventListener('click', () => { player.pause(); player.currentTime = start; });
+  item.append(jump);
+  for (const description of descriptions) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = description;
+    item.append(paragraph);
+  }
+  empty.hidden = true;
+  entries.append(item);
+  download.disabled = false;
+}
+
+analyze.addEventListener('click', async () => {
+  reset();
+  run = new AbortController();
+  const {signal} = run;
+  source.disabled = true;
+  analyze.disabled = true;
+  stop.disabled = false;
+  const duration = player.duration;
+  const total = Math.ceil(duration / segmentLength);
+  const sampler = document.createElement('video');
+  const canvas = document.createElement('canvas');
+  canvas.width = 1152;
+  canvas.height = 720;
+
+  try {
+    status.textContent = 'Checking the local vision model…';
+    ({model} = await call('/ready', signal));
+    sampler.muted = true;
+    sampler.preload = 'auto';
+    status.textContent = 'Loading frames…';
+    await new Promise((resolve, reject) => {
+      const ready = () => { cleanup(); resolve(); };
+      const failed = () => { cleanup(); reject(new Error('Could not load frames from this recording.')); };
+      const cancelled = () => { cleanup(); reject(signal.reason); };
+      const timer = setTimeout(failed, 15000);
+      function cleanup() {
+        clearTimeout(timer);
+        sampler.removeEventListener('loadedmetadata', ready);
+        sampler.removeEventListener('error', failed);
+        signal.removeEventListener('abort', cancelled);
+      }
+      sampler.addEventListener('loadedmetadata', ready);
+      sampler.addEventListener('error', failed);
+      signal.addEventListener('abort', cancelled);
+      sampler.src = url;
+    });
+    progress.hidden = false;
+    progress.max = total;
+    for (let index = 0; index < total; index++) {
+      const start = index * segmentLength;
+      const end = Math.min(start + segmentLength, duration);
+      status.textContent = 'Analyzing segment ' + (index + 1) + ' of ' + total + ' (' + timestamp(start) + '–' + timestamp(end) + ')…';
+      const image = await frameSheet(sampler, start, end, canvas, signal);
+      const result = await call('/analyze', signal, image);
+      addObservation(start, end, result);
+      progress.value = index + 1;
+    }
+    completion = 'Complete';
+    status.textContent = 'Analysis complete. ' + total + ' segments reviewed by the model.';
+  } catch (error) {
+    completion = signal.aborted ? 'Stopped' : 'Interrupted';
+    status.textContent = (signal.aborted ? 'Analysis stopped.' : error.message) +
+      (rows.length ? ' Completed segments are available to download.' : '');
+  } finally {
+    sampler.removeAttribute('src');
+    sampler.load();
+    source.disabled = false;
+    analyze.disabled = Boolean(player.error);
+    stop.disabled = true;
+    run = undefined;
+  }
+});
+
+stop.addEventListener('click', () => run?.abort());
+
+download.addEventListener('click', () => {
+  const name = source.files[0].name.replace(/[\r\n]/g, ' ');
+  const header = [
+    'VIDEO ACTIVITY REVIEW',
+    'Source file: ' + name,
+    'Source duration: ' + timestamp(player.duration),
+    'Model: ' + model,
+    'Analysis: ' + (completion || 'In progress') + ' (' + rows.length + ' of ' + progress.max + ' segments)',
+    'Method: Nine sampled frames per segment of up to eight seconds. Timestamps are relative to playback.',
+    'Automated draft. Verify observations against the source footage. Brief or obscured actions can be missed.'
+  ];
+  const body = rows.flatMap(row => ['', '[' + row.range + ']', ...row.descriptions]);
+  const blob = new Blob([[...header, ...body, ''].join('\r\n')], {type: 'text/plain;charset=utf-8'});
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = name.replace(/\.[^.]+$/, '') + '-activity.txt';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+});
+</script>
+</html>
+
