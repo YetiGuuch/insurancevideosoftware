@@ -59,10 +59,18 @@ The app looks for lifting, carrying, pushing, pulling, walking, running,
 jumping, climbing, bending, kneeling, squatting, reaching, exercise, sports,
 cycling, swimming, manual work, and other visible physical activity.
 
-Each segment covers up to eight seconds and uses nine sampled frames.
+Detailed review samples nine frames per four-second segment so brief movements are easier
+to see. Choose **Faster overview** for eight-second segments and fewer model calls.
+Both modes look for sitting down, standing up, straightening, turning, stepping,
+shifting weight, and visible head, arm, hand, and leg movements. Each segment gets one short note about its clearest movement. The vocabulary includes grasping,
+releasing, reaching overhead, using hand support, stepping up or down, crawling,
+throwing, catching, and lowering objects. For lifts, pushes or pulls, catches,
+and hand support, the model checks the visual evidence a second time. Possible lifts
+are flagged for replay.
 Timestamps are relative to the start of playback. Use **Show segments without
 a clear action** to see quieter segments in the timeline. The text report
-includes every completed segment.
+covers every completed segment and groups consecutive quiet segments with the same result.
+Identical sampled frames are marked unchanged.
 
 The report records the claimant label you selected. With clothing cues, the
 app can flag a possible match for that claimant. With the clothing fields left
@@ -70,11 +78,13 @@ blank, it describes general activity without assigning it to the claimant.
 
 Example of a report entry with clothing cues and **Female claimant** selected.
 
-`	ext
-[00:00:08–00:00:16]
+
+```text
+[00:00:08–00:00:12]
 Possible clothing match for the female claimant.
-Running — A person jogs along a paved path.
-``n
+Jogs along a paved path.
+```
+
 Similar outfits, obstructions, and camera cuts can make attribution uncertain. The app can
 miss brief actions or mistake bending over an object for lifting it. Verify
 the notes against the original footage before relying on them for an

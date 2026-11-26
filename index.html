@@ -61,6 +61,11 @@ progress { width: 100%; accent-color: #17583f; }
           </label>
         </div>
       </fieldset>
+      <label for="interval">Movement detail</label>
+      <select id="interval">
+        <option value="4">Detailed (4-second segments)</option>
+        <option value="8">Faster overview (8-second segments)</option>
+      </select>
       <video id="player" controls preload="metadata" hidden></video>
       <div class="actions">
         <button class="primary" id="analyze" disabled>Analyze video</button>
@@ -97,7 +102,8 @@ const entries = document.querySelector('#entries');
 const showQuiet = document.querySelector('#showQuiet');
 const empty = document.querySelector('#empty');
 
-const segmentLength = 8;
+const interval = document.querySelector('#interval');
+let segmentLength = 4;
 const frameCount = 9;
 let url;
 let run;
@@ -195,7 +201,16 @@ async function frameSheet(video, start, end, canvas, signal) {
     const y = Math.floor(index / 3) * height;
     context.drawImage(video, x, y, width, height);
   }
-  return canvas.toDataURL('image/jpeg', .82).split(',')[1];
+  const first = context.getImageData(0, 0, width, height).data;
+  for (let index = 1; index < frameCount; index++) {
+    const x = index % 3 * width;
+    const y = Math.floor(index / 3) * height;
+    const next = context.getImageData(x, y, width, height).data;
+    if (next.some((value, pos) => value !== first[pos])) {
+      return canvas.toDataURL('image/jpeg', .82).split(',')[1];
+    }
+  }
+  return null;
 }
 
 async function call(path, signal, body) {
@@ -237,9 +252,16 @@ showQuiet.addEventListener('change', () => {
 });
 
 function addObservation(start, end, result) {
-  const descriptions = result.events.map(event => event.label + ' — ' + event.description.replace(/\s+/g, ' ').trim());
+  const descriptions = result.events.map(event => {
+    if (event.label === 'Lifting') return 'Possible lift. Replay to verify.';
+    const note = event.description.replace(/\s+/g, ' ').trim();
+    if (/\b(?:lift(?:s|ed|ing)?|heavy|weightless|painless(?:ly)?)\b/i.test(note) ||
+        note.split(' ').length > 12) return event.label + '.';
+    return note;
+  });
   if (result.modelUnclear) descriptions.push('The model returned no readable activity note. Review this segment.');
   else if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
+  if (result.state === 'unchanged') descriptions.push('Sampled frames unchanged.');
   if (result.state === 'none_visible') descriptions.push('No human activity visible in sampled frames.');
   if (result.state === 'no_match') descriptions.push('No clothing match visible in sampled frames.');
   if (result.state === 'match_inactive') descriptions.push('Possible clothing match. No clear activity visible.');
@@ -248,10 +270,11 @@ function addObservation(start, end, result) {
     descriptions.unshift(claimant ? 'Possible clothing match for the ' + claimant + '.' : 'Possible clothing match.');
   }
   const range = timestamp(start) + '–' + timestamp(end);
-  rows.push({range, descriptions});
+  const quiet = ['none_visible', 'no_match', 'match_inactive', 'unchanged'].includes(result.state);
+  rows.push({start, end, range, descriptions, quietState: quiet ? result.state : null});
 
   const item = document.createElement('li');
-  item.dataset.quiet = String(['none_visible', 'no_match', 'match_inactive'].includes(result.state));
+  item.dataset.quiet = String(quiet);
   const jump = document.createElement('button');
   jump.className = 'time';
   jump.textContent = range;
@@ -278,6 +301,8 @@ analyze.addEventListener('click', async () => {
   clothing.disabled = true;
   analyze.disabled = true;
   stop.disabled = false;
+  segmentLength = Number(interval.value);
+  interval.disabled = true;
   const duration = player.duration;
   const total = Math.ceil(duration / segmentLength);
   const sampler = document.createElement('video');
@@ -319,12 +344,13 @@ analyze.addEventListener('click', async () => {
       const end = Math.min(start + segmentLength, duration);
       status.textContent = 'Analyzing segment ' + (index + 1) + ' of ' + total + ' (' + timestamp(start) + '–' + timestamp(end) + ')…';
       const image = await frameSheet(sampler, start, end, canvas, signal);
-      const result = await call('/analyze', signal, {image, hints});
+      const result = image === null ? {state: 'unchanged', events: []} :
+        await call('/analyze', signal, {image, hints});
       addObservation(start, end, result);
       progress.value = index + 1;
     }
     completion = 'Complete';
-    status.textContent = 'Analysis complete. ' + total + ' segments reviewed by the model.';
+    status.textContent = 'Analysis complete. ' + total + ' segments reviewed.';
   } catch (error) {
     completion = signal.aborted ? 'Stopped' : 'Interrupted';
     status.textContent = (signal.aborted ? 'Analysis stopped.' : error.message) +
@@ -334,6 +360,7 @@ analyze.addEventListener('click', async () => {
     sampler.load();
     source.disabled = false;
     clothing.disabled = false;
+    interval.disabled = false;
     analyze.disabled = Boolean(player.error);
     stop.disabled = true;
     run = undefined;
@@ -377,10 +404,19 @@ download.addEventListener('click', () => {
     'Claimant label selected by reviewer: ' + (claimant || 'Unspecified'),
     'Clothing cues: ' + (Object.entries(hints).map(([key, value]) => hintLabels[key] + '=' + value.replace(/\s+/g, ' ')).join(', ') || 'None supplied'),
     'Analysis: ' + (completion || 'In progress') + ' (' + rows.length + ' of ' + progress.max + ' segments)',
-    'Method: Nine sampled frames per segment of up to eight seconds. Timestamps are relative to playback.',
+    'Method: Nine sampled frames per segment of up to ' + segmentLength + ' seconds. Timestamps are relative to playback.',
     'Automated draft. Verify observations against the source footage. Brief or obscured actions can be missed.'
   ];
-  const body = rows.flatMap(row => ['', '[' + row.range + ']', ...row.descriptions]);
+  const body = [];
+  for (let i = 0; i < rows.length; i++) {
+    const first = rows[i];
+    let last = first;
+    while (first.quietState && rows[i + 1]?.quietState === first.quietState && last.end === rows[i + 1].start) {
+      last = rows[++i];
+    }
+    const range = timestamp(first.start) + '–' + timestamp(last.end);
+    body.push('', '[' + range + ']', ...first.descriptions);
+  }
   const blob = new Blob([[...header, ...body, ''].join('\r\n')], {type: 'text/plain;charset=utf-8'});
   const href = URL.createObjectURL(blob);
   const link = document.createElement('a');
