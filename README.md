@@ -9,10 +9,26 @@ them as a plain-text report.
 For 64-bit Windows 10 or 11, follow [Build from source](#build-from-source)
 to create the executable.
 
+## Run on Mac
+
+Use macOS Sonoma 14 or newer. Extract the Mac ZIP, then double-click
+**Start Video Activity Review.command**. If you are running from source, keep
+the launcher beside `index.html`, `server.mjs`, and `engine.mjs`. From that
+folder, you can also run:
+
+```bash
+/bin/bash "./Start Video Activity Review.command"
+```
+
+The launcher downloads its runtime on first launch and opens your browser.
+Keep the Terminal window open while you work. Press **Control-C** there to
+exit. The Mac build runs on Apple silicon or Intel. Intel analysis runs on
+the CPU and can be slower.
+
 ## Analyze a video
 
-1. Double-click the executable. It opens the review interface in your
-   browser. You can minimize the launcher while it runs.
+1. Start the Windows executable or Mac launcher. The review interface opens
+   in your browser. You can minimize the launcher window while it runs.
 2. Choose a local recording. Use an H.264 MP4 if your browser can't play the
    original file.
 3. Open **Claimant details**. Choose **Male claimant**, **Female claimant**,
@@ -26,10 +42,11 @@ to create the executable.
 
 ## First run and model updates
 
-The first setup downloads about 5 GB of engine and model files and needs
+First setup downloads about 5 GB on Windows or 3.5 GB on Mac and needs
 additional disk space during extraction. The app saves these files in
-`%LOCALAPPDATA%\VideoActivityReview` and reuses them on later runs. It prompts
-again if the required model changes or the saved files are missing. Updating
+`%LOCALAPPDATA%\VideoActivityReview` on Windows or
+`~/Library/Application Support/VideoActivityReview` on Mac and reuses them.
+It prompts again if the required model changes or the saved files are missing. Updating
 from the original model downloads the replacement model and reuses the
 existing engine.
 
@@ -68,7 +85,7 @@ insurance review.
 If the review tab loses its connection, start the EXE again or select **Open
 review window** in the running launcher. Select your video again in the new
 tab. If the old tab has a partial report, download it before closing the tab.
-Use **Exit** in the launcher when you're finished.
+On Windows, select **Exit** in the launcher when you're finished. On Mac, press **Control-C** in the launcher's Terminal window.
 
 ## Build from source
 

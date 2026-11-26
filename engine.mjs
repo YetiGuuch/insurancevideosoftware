@@ -9,31 +9,43 @@ import {pipeline} from 'node:stream/promises';
 import {promisify} from 'node:util';
 
 const version = '0.40.18';
-const archiveName = 'ollama-windows-amd64.zip';
-const sha256 = 'ca97292ac1e9acc77fcf473bb2741fa6acd12e3798f261b419680068b7cc4c16';
+const platform = {
+  win32: {
+    archive: 'ollama-windows-amd64.zip',
+    sha256: 'ca97292ac1e9acc77fcf473bb2741fa6acd12e3798f261b419680068b7cc4c16',
+    executable: 'ollama.exe',
+    tar: () => join(process.env.SystemRoot, 'System32', 'tar.exe')
+  },
+  darwin: {
+    archive: 'ollama-darwin.tgz',
+    sha256: '015261f434d31d7f0781f8ba6b59cc8e1f70ecb562a4e6db44dfdd5e02f7e562',
+    executable: 'ollama',
+    tar: () => '/usr/bin/tar'
+  }
+}[process.platform];
 const root = process.env.VIDEO_REVIEW_DATA;
-const runtime = root && join(root, 'ollama-' + version);
-const exe = runtime && join(runtime, 'ollama.exe');
+const runtime = root && platform && join(root, 'ollama-' + version);
+const exe = runtime && join(runtime, platform.executable);
 const exec = promisify(execFile);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-export const model = 'qwen3-vl:4b';
+export const model = 'qwen3-vl:4b-instruct';
 
 let child;
 let endpoint = process.env.VIDEO_REVIEW_OLLAMA;
 let starting;
-let setup = {running: false, ready: false, message: 'Download the local engine and model once (about 5 GB).'};
+let setup = {running: false, ready: false, message: 'Download the local engine and model once (' + (process.platform === 'darwin' ? 'about 3.5 GB' : 'about 5 GB') + ').'};
 const notify = message => { setup = {running: true, ready: false, message}; };
 
 async function downloadRuntime() {
   if (existsSync(exe)) return;
   await mkdir(root, {recursive: true});
-  const archive = join(root, archiveName + '.part');
+  const archive = join(root, platform.archive + '.part');
   const staging = join(root, 'ollama-staging');
   await rm(staging, {recursive: true, force: true});
   await mkdir(staging);
   try {
     notify('Downloading the local engine…');
-    const response = await fetch('https://github.com/ollama/ollama/releases/download/v' + version + '/' + archiveName, {
+    const response = await fetch('https://github.com/ollama/ollama/releases/download/v' + version + '/' + platform.archive, {
       signal: AbortSignal.timeout(7200000)
     });
     if (!response.ok || !response.body) throw new Error('Engine download failed (HTTP ' + response.status + ').');
@@ -54,10 +66,10 @@ async function downloadRuntime() {
       }
     });
     await pipeline(Readable.fromWeb(response.body), progress, createWriteStream(archive));
-    if (hash.digest('hex') !== sha256) throw new Error('Engine download checksum did not match. Try again.');
+    if (hash.digest('hex') !== platform.sha256) throw new Error('Engine download checksum did not match. Try again.');
     notify('Extracting the local engine…');
-    await exec(join(process.env.SystemRoot, 'System32', 'tar.exe'), ['-xf', archive, '-C', staging], {windowsHide: true});
-    if (!existsSync(join(staging, 'ollama.exe'))) throw new Error('The engine archive did not contain ollama.exe.');
+    await exec(platform.tar(), ['-xf', archive, '-C', staging], {windowsHide: true});
+    if (!existsSync(join(staging, platform.executable))) throw new Error('The engine archive did not contain the expected Ollama executable.');
     await rename(staging, runtime);
   } finally {
     await rm(archive, {force: true});
@@ -128,12 +140,17 @@ export async function readiness(signal) {
   const response = await fetch(url + '/api/tags', {signal});
   if (!response.ok) throw new Error('Could not check the local model.');
   const {models} = await response.json();
-  return models?.some(item => item.name === model) ?
-    {ready: true, model} : {ready: false, message: setup.message};
+  if (models?.some(item => item.name === model)) return {ready: true, model};
+  const update = models?.some(item => item.name === 'qwen3-vl:4b');
+  return {
+    ready: false,
+    update,
+    message: update ? 'Download the updated vision model once, then analyze again.' : setup.message
+  };
 }
 
 async function install() {
-  if (!root) throw new Error('Start the Windows executable to set up the local engine.');
+  if (!root || !platform) throw new Error('Start a supported Windows or Mac launcher to set up the local engine.');
   await downloadRuntime();
   notify('Starting the local engine…');
   const url = await startEngine();

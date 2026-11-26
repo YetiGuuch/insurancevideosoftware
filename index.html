@@ -19,7 +19,7 @@ fieldset { border: 1px solid #ccd9d2; border-radius: 8px; padding: 12px; margin:
 legend { padding: 0 5px; font-weight: 600; }
 .hints { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .hints label { font-size: .88rem; }
-.hints input { display: block; width: 100%; margin-top: 4px; border: 1px solid #a6bbb0; border-radius: 6px; padding: 7px; font: inherit; }
+.hints input, .hints select { display: block; width: 100%; margin-top: 4px; border: 1px solid #a6bbb0; border-radius: 6px; padding: 7px; font: inherit; }
 video { width: 100%; max-height: 420px; background: #172624; border-radius: 8px; margin-top: 16px; }
 [hidden] { display: none !important; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
@@ -45,13 +45,20 @@ progress { width: 100%; accent-color: #17583f; }
       <label for="source">Choose a recording</label>
       <input type="file" accept="video/*,.mkv,.avi" id="source">
       <fieldset id="clothing">
-        <legend>What was the person wearing?</legend>
-        <p class="muted">Optional. Describe visible clothing. Leave unknown details blank.</p>
+        <legend>Claimant details</legend>
+        <p class="muted">Optional. Choose a report label and describe what the person was wearing.</p>
         <div class="hints">
           <label>Top or jacket<input id="top" type="text" maxlength="120" placeholder="e.g. red rain jacket"></label>
           <label>Pants or shorts<input id="bottom" type="text" maxlength="120" placeholder="e.g. dark jeans"></label>
           <label>Shoes<input id="shoes" type="text" maxlength="120" placeholder="e.g. white sneakers"></label>
           <label>Hat or accessory<input id="accessory" type="text" maxlength="120" placeholder="e.g. black cap"></label>
+          <label>Claimant label
+            <select id="claimant">
+              <option value="">Unspecified</option>
+              <option value="male claimant">Male claimant</option>
+              <option value="female claimant">Female claimant</option>
+            </select>
+          </label>
         </div>
       </fieldset>
       <video id="player" controls preload="metadata" hidden></video>
@@ -60,6 +67,7 @@ progress { width: 100%; accent-color: #17583f; }
         <button id="stop" disabled>Stop</button><button id="setup" hidden>Download analysis engine</button>
       </div>
       <p id="status" role="status">Choose a browser-playable video, such as an H.264 MP4.</p>
+      <p class="muted">Keep the Video Activity Review launcher running while you use this tab.</p>
       <progress id="progress" value="0" max="1" aria-label="Analysis progress" hidden></progress>
     </section>
     <section aria-labelledby="notes-title">
@@ -78,6 +86,7 @@ const setup = document.querySelector('#setup');
 const hintFields = ['top', 'bottom', 'shoes', 'accessory'];
 const hintLabels = {top: 'Top', bottom: 'Bottom', shoes: 'Shoes', accessory: 'Accessory'};
 let hints = {};
+let claimant = '';
 const player = document.querySelector('#player');
 const analyze = document.querySelector('#analyze');
 const stop = document.querySelector('#stop');
@@ -171,12 +180,12 @@ function seek(video, time, signal) {
 }
 
 async function frameSheet(video, start, end, canvas, signal) {
-  const width = 384;
-  const height = 240;
+  const scale = Math.min(384 / video.videoWidth, 320 / video.videoHeight);
+  const width = Math.max(1, Math.round(video.videoWidth * scale));
+  const height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.width = width * 3;
+  canvas.height = height * 3;
   const context = canvas.getContext('2d', {alpha: false});
-  const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
-  const imageWidth = video.videoWidth * scale;
-  const imageHeight = video.videoHeight * scale;
   context.fillStyle = '#121212';
   context.fillRect(0, 0, canvas.width, canvas.height);
   for (let index = 0; index < frameCount; index++) {
@@ -184,15 +193,29 @@ async function frameSheet(video, start, end, canvas, signal) {
     await seek(video, time, signal);
     const x = index % 3 * width;
     const y = Math.floor(index / 3) * height;
-    context.drawImage(video, x + (width - imageWidth) / 2, y + (height - imageHeight) / 2, imageWidth, imageHeight);
+    context.drawImage(video, x, y, width, height);
   }
   return canvas.toDataURL('image/jpeg', .82).split(',')[1];
 }
 
 async function call(path, signal, body) {
-  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body), signal});
+  let response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error('This tab couldn’t reach the app. Open the Video Activity Review launcher again and select your video in the new tab. Keep the launcher running.');
+  }
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('Open the review window from the Video Activity Review launcher and try again.');
+  }
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error);
+  if (!response.ok) throw new Error(result.error || 'The local app returned an error. Try again.');
   return result;
 }
 
@@ -215,13 +238,15 @@ showQuiet.addEventListener('change', () => {
 
 function addObservation(start, end, result) {
   const descriptions = result.events.map(event => event.label + ' — ' + event.description.replace(/\s+/g, ' ').trim());
-  if (result.modelUnclear) descriptions.push('The model could not produce a usable observation. Review this segment.');
+  if (result.modelUnclear) descriptions.push('The model returned no readable activity note. Review this segment.');
   else if (result.state === 'unclear') descriptions.push('Unclear activity. Review this segment.');
   if (result.state === 'none_visible') descriptions.push('No human activity visible in sampled frames.');
   if (result.state === 'no_match') descriptions.push('No clothing match visible in sampled frames.');
   if (result.state === 'match_inactive') descriptions.push('Possible clothing match. No clear activity visible.');
   if (!result.modelUnclear && result.state === 'match_unclear') descriptions.push('Clothing match unclear. Review this segment.');
-  if (result.state === 'activity' && Object.keys(hints).length) descriptions.unshift('Possible clothing match.');
+  if (result.state === 'activity' && Object.keys(hints).length) {
+    descriptions.unshift(claimant ? 'Possible clothing match for the ' + claimant + '.' : 'Possible clothing match.');
+  }
   const range = timestamp(start) + '–' + timestamp(end);
   rows.push({range, descriptions});
 
@@ -248,6 +273,7 @@ analyze.addEventListener('click', async () => {
   run = new AbortController();
   const {signal} = run;
   hints = Object.fromEntries(hintFields.map(key => [key, document.getElementById(key).value.trim()]).filter(([, value]) => value));
+  claimant = document.querySelector('#claimant').value;
   source.disabled = true;
   clothing.disabled = true;
   analyze.disabled = true;
@@ -256,14 +282,13 @@ analyze.addEventListener('click', async () => {
   const total = Math.ceil(duration / segmentLength);
   const sampler = document.createElement('video');
   const canvas = document.createElement('canvas');
-  canvas.width = 1152;
-  canvas.height = 720;
 
   try {
     status.textContent = 'Checking the local vision model…';
     const readiness = await call('/ready', signal);
     if (!readiness.ready) {
       status.textContent = readiness.message;
+      setup.textContent = readiness.update ? 'Update vision model' : 'Download analysis engine';
       setup.hidden = false;
       return;
     }
@@ -349,6 +374,7 @@ download.addEventListener('click', () => {
     'Source file: ' + name,
     'Source duration: ' + timestamp(player.duration),
     'Model: ' + model,
+    'Claimant label selected by reviewer: ' + (claimant || 'Unspecified'),
     'Clothing cues: ' + (Object.entries(hints).map(([key, value]) => hintLabels[key] + '=' + value.replace(/\s+/g, ' ')).join(', ') || 'None supplied'),
     'Analysis: ' + (completion || 'In progress') + ' (' + rows.length + ' of ' + progress.max + ' segments)',
     'Method: Nine sampled frames per segment of up to eight seconds. Timestamps are relative to playback.',

@@ -17,6 +17,7 @@ internal sealed class Launcher : Form
     private Process server;
     private DateTime deadline;
     private bool reportedFailure;
+    private bool exiting;
 
     public Launcher()
     {
@@ -25,6 +26,7 @@ internal sealed class Launcher : Form
         ClientSize = new Size(470, 155);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
+        MinimizeBox = true;
         Font = SystemFonts.MessageBoxFont;
 
         status = new Label { Left = 22, Top = 20, Width = 426, Height = 56, Text = "Starting Video Activity Review…" };
@@ -32,7 +34,13 @@ internal sealed class Launcher : Form
         var exit = new Button { Left = 344, Top = 88, Width = 104, Height = 33, Text = "Exit" };
         Controls.AddRange(new Control[] { status, open, exit });
         open.Click += delegate { OpenBrowser(); };
-        exit.Click += delegate { Close(); };
+        exit.Click += delegate { exiting = true; Close(); };
+        FormClosing += delegate(object sender, FormClosingEventArgs args) {
+            if (!exiting && args.CloseReason == CloseReason.UserClosing && server != null && !server.HasExited) {
+                args.Cancel = true;
+                WindowState = FormWindowState.Minimized;
+            }
+        };
 
         timer = new System.Windows.Forms.Timer { Interval = 250 };
         timer.Tick += delegate { CheckServer(); };
@@ -85,7 +93,7 @@ internal sealed class Launcher : Form
                 using (var client = new System.Net.WebClient()) {
                     client.Proxy = null;
                     var page = client.DownloadString(address);
-                    return page.Contains("What was the person wearing?") ? 0 : 4;
+                    return page.Contains("Claimant details") ? 0 : 4;
                 }
             } catch {
                 return 5;
@@ -155,7 +163,7 @@ internal sealed class Launcher : Form
         url = ReadAddress();
         if (url == null) return;
         open.Enabled = true;
-        status.Text = "The review interface opens in your browser. Leave this window open while you analyze video.";
+        status.Text = "The review interface opens in your browser. You can minimize this launcher. Exit stops analysis and disconnects the browser.";
         OpenBrowser();
     }
 
