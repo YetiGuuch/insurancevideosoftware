@@ -36,9 +36,9 @@ the CPU and can be slower.
 4. Click **Analyze video**. If prompted, click **Download analysis engine**
    or **Update vision model**. When setup finishes, click **Analyze video**
    again.
-5. Click a timestamp to replay that part of the video. Click **Download text
-   report** to save the notes. **Stop** ends analysis early and keeps the
-   completed segments available for export.
+5. To focus on someone, pause the video before analysis, choose **Select person in current frame**, and click their torso in the still image. If the appearance match becomes unclear, the app pauses. Seek to a clear frame, select again, and resume.
+6. Click a timestamp to replay from two seconds before the note. Use **Confirm**, **Edit**, or **Dismiss**. Confirm an edited note to include it in **Export confirmed notes**.
+7. **Stop** pauses analysis after the last completed segment. **Save review** downloads a local review file containing notes, decisions, settings, playback position, and the reference frame if selected. To resume after closing the app, choose the original recording and **Open saved review**. Save again after making changes.
 
 ## First run and model updates
 
@@ -68,15 +68,14 @@ throwing, catching, and lowering objects. For lifts, pushes or pulls, catches,
 and hand support, the model checks the visual evidence a second time. Possible lifts
 are flagged for replay.
 Timestamps are relative to the start of playback. Use **Show segments without
-a clear action** to see quieter segments in the timeline. The text report
-covers every completed segment and groups consecutive quiet segments with the same result.
+a clear action** to see quieter segments in the timeline. The text report contains only confirmed notes.
+Consecutive draft notes with the same movement are grouped when the model sees a continuous action by the same person. Reviewed or edited notes keep their original ranges.
 The app estimates an exposure adjustment for the analysis frames. You replay the original video.
 If most samples have too little light, highlight detail, or contrast, the note reads
 **Lighting obscures movement**. Visible frozen frames are marked unchanged.
 
 The report records the claimant label you selected. With clothing cues, the
-app can flag a possible match for that claimant. With the clothing fields left
-blank, it describes general activity without assigning it to the claimant.
+app can flag a possible match for that claimant. A selected frame can also guide appearance matching. Without clothing cues or a selection, notes describe general activity.
 
 Example of a report entry with clothing cues and **Female claimant** selected.
 
@@ -96,7 +95,7 @@ insurance review.
 
 If the review tab loses its connection, start the EXE again or select **Open
 review window** in the running launcher. Select your video again in the new
-tab. If the old tab has a partial report, download it before closing the tab.
+tab. Save the review in the old tab and open that file in the new tab.
 On Windows, select **Exit** in the launcher when you're finished. On Mac, press **Control-C** in the launcher's Terminal window.
 
 ## Build from source

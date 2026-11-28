@@ -67,9 +67,18 @@ progress { width: 100%; accent-color: #17583f; }
         <option value="8">Faster overview (8-second segments)</option>
       </select>
       <video id="player" controls preload="metadata" hidden></video>
+      <button id="pick" disabled>Select person in current frame</button>
+      <button id="clearPick" hidden>Clear selection</button>
+      <canvas id="portrait" hidden style="width:100%;height:auto;cursor:crosshair" aria-label="Select the person's torso in this frame"></canvas>
+      <p id="pickStatus" class="muted"></p>
       <div class="actions">
         <button class="primary" id="analyze" disabled>Analyze video</button>
         <button id="stop" disabled>Stop</button><button id="setup" hidden>Download analysis engine</button>
+      </div>
+      <div class="actions">
+        <button id="saveReview" disabled>Save review</button>
+        <button id="openReview" disabled>Open saved review</button>
+        <input id="reviewFile" type="file" accept=".json" hidden>
       </div>
       <p id="status" role="status">Choose a browser-playable video, such as an H.264 MP4.</p>
       <p class="muted">Keep the Video Activity Review launcher running while you use this tab.</p>
@@ -77,10 +86,10 @@ progress { width: 100%; accent-color: #17583f; }
     </section>
     <section aria-labelledby="notes-title">
       <h2 id="notes-title">Activity notes</h2>
-      <p class="muted">Verify observations against the source footage. Select a timestamp to jump to that segment.</p>
+      <p class="muted">Verify observations against the source footage. Select a timestamp to replay with a two-second lead-in. Confirm the notes you want in the report.</p>
       <p id="empty" class="muted">Observations appear here as the video is analyzed.</p>
       <label class="muted"><input type="checkbox" id="showQuiet"> Show segments without a clear action</label><ol id="entries"></ol>
-      <div class="actions"><button id="download" disabled>Download text report</button></div>
+      <div class="actions"><button id="download" disabled>Export confirmed notes</button></div>
     </section>
   </div>
 </main>
@@ -113,6 +122,76 @@ let completion = '';
 let model = '';
 let setupInProgress = false;
 
+const pick = document.querySelector('#pick');
+const portrait = document.querySelector('#portrait');
+const pickStatus = document.querySelector('#pickStatus');
+const clearPick = document.querySelector('#clearPick');
+const saveReview = document.querySelector('#saveReview');
+const openReview = document.querySelector('#openReview');
+const reviewFile = document.querySelector('#reviewFile');
+let reference = '';
+let previousFrame = '';
+let dirty = false;
+let needsPick = false;
+
+function syncControls() {
+  const loaded = Boolean(url && player.videoWidth && !player.error);
+  const busy = Boolean(run || setupInProgress);
+  const complete = rows.length && rows.at(-1).end >= player.duration;
+  analyze.disabled = !loaded || busy || complete || needsPick;
+  analyze.textContent = rows.length && !complete ? 'Resume analysis' : 'Analyze video';
+  openReview.disabled = !loaded || busy;
+  saveReview.disabled = !loaded;
+  pick.disabled = !loaded || busy;
+  clearPick.disabled = busy;
+  clearPick.hidden = !reference;
+  clothing.disabled = busy || rows.length > 0;
+  interval.disabled = busy || rows.length > 0;
+  download.disabled = !rows.some(row => row.review === 'confirmed');
+}
+
+window.addEventListener('beforeunload', event => {
+  if (dirty) { event.preventDefault(); event.returnValue = ''; }
+});
+
+function capturePortrait() {
+  player.pause();
+  const scale = Math.min(1, 480 / Math.max(player.videoWidth, player.videoHeight));
+  portrait.width = Math.max(1, Math.round(player.videoWidth * scale));
+  portrait.height = Math.max(1, Math.round(player.videoHeight * scale));
+  portrait.getContext('2d').drawImage(player, 0, 0, portrait.width, portrait.height);
+  portrait.hidden = false;
+  pickStatus.textContent = 'Click the torso of the person to follow.';
+}
+pick.addEventListener('click', capturePortrait);
+portrait.addEventListener('click', event => {
+  if (run) return;
+  const box = portrait.getBoundingClientRect();
+  const x = (event.clientX - box.left) * portrait.width / box.width;
+  const y = (event.clientY - box.top) * portrait.height / box.height;
+  const ctx = portrait.getContext('2d');
+  ctx.strokeStyle = '#ff00ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 7, 0, Math.PI * 2);
+  ctx.stroke();
+  reference = portrait.toDataURL('image/jpeg', .85).split(',')[1];
+  portrait.hidden = true;
+  previousFrame = '';
+  dirty = true;
+  needsPick = false;
+  pickStatus.textContent = 'Person selected. Appearance will guide subsequent segments.';
+  syncControls();
+});
+clearPick.addEventListener('click', () => {
+  reference = previousFrame = '';
+  portrait.hidden = true;
+  dirty = true;
+  needsPick = false;
+  pickStatus.textContent = '';
+  syncControls();
+});
+
 function timestamp(seconds) {
   const milliseconds = Math.round(seconds * 1000);
   const whole = Math.floor(milliseconds / 1000);
@@ -134,8 +213,20 @@ function reset() {
   progress.value = 0;
 }
 
+source.addEventListener('click', event => {
+  if (dirty && !window.confirm('Choose another recording and leave this unsaved review?')) event.preventDefault();
+});
 source.addEventListener('change', () => {
   reset();
+  reference = previousFrame = '';
+  for (const key of hintFields) document.getElementById(key).value = '';
+  document.querySelector('#claimant').value = '';
+  dirty = false;
+  needsPick = false;
+  pickStatus.textContent = '';
+  portrait.hidden = true;
+  saveReview.disabled = openReview.disabled = pick.disabled = true;
+  clearPick.hidden = true;
   analyze.disabled = true;
   const oldUrl = url;
   url = source.files[0] ? URL.createObjectURL(source.files[0]) : undefined;
@@ -149,7 +240,8 @@ source.addEventListener('change', () => {
 
 player.addEventListener('loadedmetadata', () => {
   const playable = Number.isFinite(player.duration) && player.duration > 0 && player.videoWidth > 0;
-  analyze.disabled = !playable || setupInProgress;
+  syncControls();
+  if (!playable) analyze.disabled = true;
   status.textContent = playable ? 'Ready to analyze. Duration ' + timestamp(player.duration) + '.' :
     'This file has no playable video track with a known duration.';
 });
@@ -342,34 +434,93 @@ function addObservation(start, end, result) {
   if (result.state === 'no_match') descriptions.push('No clothing match visible in sampled frames.');
   if (result.state === 'match_inactive') descriptions.push('Possible clothing match. No clear activity visible.');
   if (!result.modelUnclear && result.state === 'match_unclear') descriptions.push('Clothing match unclear. Review this segment.');
-  if (result.state === 'activity' && Object.keys(hints).length) {
-    descriptions.unshift(claimant ? 'Possible clothing match for the ' + claimant + '.' : 'Possible clothing match.');
+  if (result.state === 'activity' && (reference || Object.keys(hints).length)) {
+    descriptions.unshift(reference ? 'Possible appearance match' + (claimant ? ' for the ' + claimant : '') + '.' : claimant ? 'Possible clothing match for the ' + claimant + '.' : 'Possible clothing match.');
   }
   const range = timestamp(start) + '–' + timestamp(end);
   const quiet = ['none_visible', 'no_match', 'match_inactive', 'unchanged'].includes(result.state);
-  rows.push({start, end, range, descriptions, quietState: quiet ? result.state : null});
-
-  const item = document.createElement('li');
-  item.dataset.quiet = String(quiet);
-  const jump = document.createElement('button');
-  jump.className = 'time';
-  jump.textContent = range;
-  jump.addEventListener('click', () => { player.pause(); player.currentTime = start; });
-  item.append(jump);
-  for (const description of descriptions) {
-    const paragraph = document.createElement('p');
-    paragraph.textContent = description;
-    item.append(paragraph);
+  const label = result.events[0]?.label || '';
+  const last = rows.at(-1);
+  if (label && last?.label === label && last.end === start && result.continuous === true &&
+      last.review === 'draft' && !last.edited && !last.editing) {
+    last.end = end;
+    last.range = timestamp(last.start) + '–' + timestamp(end);
+    last.descriptions[last.descriptions.length - 1] = label === 'Lifting' ? 'Possible lift. Replay to verify.' : label + '.';
+    entries.lastElementChild.querySelector('.time').textContent = last.range;
+    entries.lastElementChild.querySelector('.noteText').textContent = last.descriptions.join(' ');
+  } else {
+    const row = {start, end, range, descriptions, label, review: 'draft', quietState: quiet ? result.state : null};
+    rows.push(row);
+    renderRow(row);
   }
+  dirty = true;
+  updateEmptyNotes();
+  syncControls();
+}
+
+function renderRow(row) {
+  const item = document.createElement('li');
+  item.dataset.quiet = String(Boolean(row.quietState));
+  const button = (parent, title, action) => {
+    const element = document.createElement('button');
+    element.textContent = title;
+    element.onclick = action;
+    parent.append(element);
+    return element;
+  };
+  const jump = button(item, row.range, () => {
+    player.currentTime = Math.max(0, row.start - 2);
+    player.play().catch(() => {});
+  });
+  jump.className = 'time';
+  const note = document.createElement('p');
+  note.className = 'noteText';
+  note.textContent = row.descriptions.join(' ');
+  item.append(note);
+  const controls = document.createElement('div');
+  controls.className = 'actions';
+  item.append(controls);
+  const mark = state => {
+    row.review = state;
+    dirty = true;
+    drawButtons();
+    syncControls();
+  };
+  function drawButtons() {
+    controls.replaceChildren();
+    const confirm = button(controls, row.review === 'confirmed' ? 'Confirmed' : 'Confirm', () => mark('confirmed'));
+    confirm.disabled = row.review === 'confirmed';
+    button(controls, 'Edit', () => {
+      row.editing = true;
+      controls.replaceChildren();
+      const input = document.createElement('textarea');
+      input.setAttribute('aria-label', 'Edit observation');
+      input.value = row.descriptions.join(' ');
+      controls.append(input);
+      input.focus();
+      button(controls, 'Save edit', () => {
+        if (!input.value.trim()) return;
+        row.descriptions = [input.value.trim()];
+        row.edited = true;
+        row.editing = false;
+        note.textContent = row.descriptions[0];
+        mark('draft');
+      });
+      button(controls, 'Cancel', () => { row.editing = false; drawButtons(); });
+    });
+    button(controls, row.review === 'dismissed' ? 'Undo dismissal' : 'Dismiss',
+      () => mark(row.review === 'dismissed' ? 'draft' : 'dismissed'));
+    if (row.review === 'dismissed') controls.prepend('Dismissed ');
+  }
+  drawButtons();
   applyVisibility(item);
   entries.append(item);
-  updateEmptyNotes();
-  download.disabled = false;
 }
 
 analyze.addEventListener('click', async () => {
-  reset();
+  portrait.hidden = true;
   run = new AbortController();
+  syncControls();
   const {signal} = run;
   hints = Object.fromEntries(hintFields.map(key => [key, document.getElementById(key).value.trim()]).filter(([, value]) => value));
   claimant = document.querySelector('#claimant').value;
@@ -415,21 +566,41 @@ analyze.addEventListener('click', async () => {
     });
     progress.hidden = false;
     progress.max = total;
-    for (let index = 0; index < total; index++) {
+    for (let index = Math.ceil((rows.at(-1)?.end || 0) / segmentLength); index < total; index++) {
       const start = index * segmentLength;
       const end = Math.min(start + segmentLength, duration);
       status.textContent = 'Analyzing segment ' + (index + 1) + ' of ' + total + ' (' + timestamp(start) + '–' + timestamp(end) + ')…';
       const sample = await frameSheet(sampler, start, end, canvas, signal);
-      const result = sample.state ? sample : await call('/analyze', signal, {...sample, hints});
+      const result = sample.state ? sample : await call('/analyze', signal, {
+        ...sample, reference, previousFrame, hints,
+        previousAction: previousFrame ? rows.at(-1)?.label : ''
+      });
+      previousFrame = '';
+      if (!sample.state && result.state === 'activity') {
+        const tail = document.createElement('canvas');
+        tail.width = canvas.width / 3;
+        tail.height = canvas.height / 3;
+        tail.getContext('2d').drawImage(canvas, 2*tail.width, 2*tail.height, tail.width, tail.height,
+          0, 0, tail.width, tail.height);
+        previousFrame = tail.toDataURL('image/jpeg', .75).split(',')[1];
+      }
       addObservation(start, end, result);
       progress.value = index + 1;
+      if (reference && ['no_match', 'match_unclear', 'lighting_unclear', 'unclear'].includes(result.state) && end < duration) {
+        needsPick = true;
+        completion = 'Paused';
+        player.pause();
+        player.currentTime = end;
+        status.textContent = 'Person lost or unclear. Select the person again, or clear the selection to continue.';
+        return;
+      }
     }
     completion = 'Complete';
     status.textContent = 'Analysis complete. ' + total + ' segments reviewed.';
   } catch (error) {
     completion = signal.aborted ? 'Stopped' : 'Interrupted';
     status.textContent = (signal.aborted ? 'Analysis stopped.' : error.message) +
-      (rows.length ? ' Completed segments are available to download.' : '');
+      (rows.length ? ' Save your review to continue later.' : '');
   } finally {
     sampler.removeAttribute('src');
     sampler.load();
@@ -439,6 +610,7 @@ analyze.addEventListener('click', async () => {
     analyze.disabled = Boolean(player.error);
     stop.disabled = true;
     run = undefined;
+    syncControls();
   }
 });
 
@@ -465,7 +637,7 @@ setup.addEventListener('click', async () => {
     setupInProgress = false;
     setup.disabled = false;
     source.disabled = false;
-    analyze.disabled = player.readyState < 1 || Boolean(player.error);
+    syncControls();
   }
 });
 
@@ -478,27 +650,101 @@ download.addEventListener('click', () => {
     'Model: ' + model,
     'Claimant label selected by reviewer: ' + (claimant || 'Unspecified'),
     'Clothing cues: ' + (Object.entries(hints).map(([key, value]) => hintLabels[key] + '=' + value.replace(/\s+/g, ' ')).join(', ') || 'None supplied'),
-    'Analysis: ' + (completion || 'In progress') + ' (' + rows.length + ' of ' + progress.max + ' segments)',
+    'Analysis: ' + (completion || 'In progress') + ' (' + Math.ceil((rows.at(-1)?.end || 0) / segmentLength) + ' of ' + Math.ceil(player.duration / segmentLength) + ' segments)',
     'Method: Nine sampled frames per segment of up to ' + segmentLength + ' seconds. Exposure adjusted when needed. Timestamps are relative to playback.',
-    'Automated draft. Verify observations against the source footage. Brief or obscured actions can be missed.'
+    'Reviewer-confirmed observations. Times are relative to the recording.'
   ];
-  const body = [];
-  for (let i = 0; i < rows.length; i++) {
-    const first = rows[i];
-    let last = first;
-    while (first.quietState && rows[i + 1]?.quietState === first.quietState && last.end === rows[i + 1].start) {
-      last = rows[++i];
-    }
-    const range = timestamp(first.start) + '–' + timestamp(last.end);
-    body.push('', '[' + range + ']', ...first.descriptions);
-  }
-  const blob = new Blob([[...header, ...body, ''].join('\r\n')], {type: 'text/plain;charset=utf-8'});
+  const body = rows.filter(row => row.review === 'confirmed')
+    .flatMap(row => ['', '[' + row.range + ']', ...row.descriptions]);
+  saveBlob(new Blob([[...header, ...body, ''].join('\r\n')], {type:'text/plain;charset=utf-8'}),
+    name.replace(/\.[^.]+$/, '') + '-activity.txt');
+});
+
+function saveBlob(blob, filename) {
   const href = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = href;
-  link.download = name.replace(/\.[^.]+$/, '') + '-activity.txt';
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(href), 1000);
-});
+}
+
+// Review files are portable across launcher restarts, including changes of localhost port.
+async function recordingKey(file) {
+  const size = file.size;
+  const chunks = [new TextEncoder().encode(String(size))];
+  for (const offset of [0, Math.floor(size / 2), Math.max(0, size - 65536)]) {
+    chunks.push(await file.slice(offset, offset + 65536).arrayBuffer());
+  }
+  const digest = await crypto.subtle.digest('SHA-256', await new Blob(chunks).arrayBuffer());
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+saveReview.onclick = async () => {
+  const file = source.files[0];
+  try {
+    const key = await recordingKey(file);
+    if (source.files[0] !== file) return;
+    const snapshot = {version:1, key, duration:player.duration, position:player.currentTime,
+      interval:Number(interval.value), claimant:document.querySelector('#claimant').value,
+      hints:Object.fromEntries(hintFields.map(k => [k, document.getElementById(k).value])),
+      reference, needsPick, rows, model, completion};
+    saveBlob(new Blob([JSON.stringify(snapshot)], {type:'application/json'}), file.name + '.review.json');
+    dirty = false;
+  } catch (error) { status.textContent = 'Could not save review. ' + error.message; }
+};
+openReview.onclick = () => { reviewFile.value = ''; reviewFile.click(); };
+reviewFile.onchange = async () => {
+  const file = source.files[0];
+  const saved = reviewFile.files[0];
+  if (!file || !saved || run) return;
+  try {
+    const data = JSON.parse(await saved.text());
+    const key = await recordingKey(file);
+    if (source.files[0] !== file || run) return;
+    if (data.key !== key || data.duration !== player.duration) throw Error('Select the original recording first.');
+    if (data.version !== 1 || ![4,8].includes(data.interval) || !Array.isArray(data.rows) ||
+        !['', 'male claimant', 'female claimant'].includes(data.claimant) ||
+        !hintFields.every(k => typeof data.hints?.[k] === 'string') ||
+        typeof data.reference !== 'string' || (data.reference && !/^\/9j\/[A-Za-z0-9+/]+=*$/.test(data.reference))) {
+      throw Error('Unrecognized review format.');
+    }
+    let end = 0;
+    for (const row of data.rows) {
+      if (row.start !== end || !Number.isFinite(row.end) || row.end <= end || row.end > data.duration ||
+          (row.end !== data.duration && row.end % data.interval !== 0) ||
+          !['draft','confirmed','dismissed'].includes(row.review) ||
+          !Array.isArray(row.descriptions) || !row.descriptions.length ||
+          !row.descriptions.every(line => typeof line === 'string')) throw Error('Invalid saved observation.');
+      row.range = timestamp(row.start) + '–' + timestamp(row.end);
+      row.editing = false;
+      end = row.end;
+    }
+    if (dirty && !window.confirm('Replace the current review with this saved copy?')) return;
+    reset();
+    previousFrame = '';
+    portrait.hidden = true;
+    rows = data.rows;
+    reference = data.reference;
+    needsPick = Boolean(reference && data.needsPick);
+    pickStatus.textContent = needsPick ? 'Select the person again to continue.' : reference ? 'Person selection restored.' : '';
+    segmentLength = data.interval;
+    interval.value = String(segmentLength);
+    claimant = document.querySelector('#claimant').value = data.claimant;
+    for (const k of hintFields) document.getElementById(k).value = data.hints[k];
+    hints = Object.fromEntries(Object.entries(data.hints).filter(([k,v]) => hintFields.includes(k) && v));
+    model = String(data.model || '');
+    completion = end >= player.duration ? 'Complete' : 'Paused';
+    for (const row of rows) renderRow(row);
+    updateEmptyNotes();
+    progress.max = Math.ceil(player.duration / segmentLength);
+    progress.value = Math.ceil(end / segmentLength);
+    progress.hidden = !rows.length;
+    player.currentTime = Math.max(0, Math.min(player.duration, Number(data.position) || 0));
+    status.textContent = 'Review restored. ' + progress.value + ' of ' + progress.max + ' segments complete.';
+    dirty = false;
+    syncControls();
+  } catch (error) { status.textContent = 'Could not open review. ' + error.message; }
+};
 </script>
 </html>

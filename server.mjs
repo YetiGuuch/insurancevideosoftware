@@ -109,7 +109,19 @@ const server = createServer(async (request, response) => {
       const value = input.hints?.[key];
       return typeof value === 'string' && value.trim() ? [[key, value.replace(/\s+/g, ' ').trim().slice(0, 120)]] : [];
     }));
-    const focused = Object.keys(hints).length > 0;
+    for (const value of [input.reference, input.previousFrame]) {
+      if (value && (typeof value !== 'string' || value.length > 500000 || !/^\/9j\/[A-Za-z0-9+/]+=*$/.test(value))) {
+        return json(response, 400, {error: 'Invalid reference frame.'});
+      }
+    }
+    const focused = Boolean(input.reference) || Object.keys(hints).length > 0;
+    const contextImages = [input.image, input.reference, input.previousFrame].filter(Boolean);
+    const imageGuide = [
+      'The first image is the chronological grid to analyze.',
+      input.reference && 'Image two is a separate reference: the magenta ring marks the selected person. Match only by visible clothing and appearance, never face. If the marked person disappears, multiple people match, or a cut breaks attribution, return match_unclear or no_match.',
+      input.previousFrame && labels.includes(input.previousAction) && 'Previous movement label: ' + input.previousAction + '.',
+      input.previousFrame && 'The last image precedes the grid. Set continuous to true only if the same single person performing the same movement remains visibly present from that image through the entire grid with no cut, interruption, or ambiguity.'
+    ].filter(Boolean).join(' ');
     const states = focused ? focusedStates : generalStates;
     const prompt = [
       'Read this 3 by 3 grid of sequential frames left to right, then top to bottom.',
@@ -137,15 +149,16 @@ const server = createServer(async (request, response) => {
         method: 'POST', signal, headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           model, stream: false, format, options: {temperature: 0, num_ctx: 4096, num_predict: tokens},
-          messages: [{role: 'user', content: instruction, images: [input.image]}]
+          messages: [{role: 'user', content: imageGuide + ' ' + instruction, images: contextImages}]
         })
       });
       if (!result.ok) throw new Error('The local engine could not analyze this segment (HTTP ' + result.status + ').');
       return (await result.json()).message?.content;
     }
     const content = await analyzeFrames(prompt, {
-      type: 'object', required: ['subject', 'state', 'events'],
+      type: 'object', required: input.previousFrame ? ['subject', 'state', 'events', 'continuous'] : ['subject', 'state', 'events'],
       properties: {
+        ...(input.previousFrame ? {continuous: {type:'boolean'}} : {}),
         subject: {type: 'string', enum: ['real_person','no_visible_person','uncertain']},
         state: {type: 'string', enum: states},
         events: {type: 'array', maxItems: 1, items: {
@@ -170,6 +183,9 @@ const server = createServer(async (request, response) => {
       let supported = false;
       try { supported = JSON.parse(verdict).verdict === 'supported'; } catch {}
       if (!supported) return json(response, 200, {state: focused ? 'match_unclear' : 'unclear', events: []});
+    }
+    if (input.previousFrame && note.state === 'activity') {
+      try { note.continuous = JSON.parse(content).continuous === true; } catch { note.continuous = false; }
     }
     return json(response, 200, note);
   } catch (error) {
