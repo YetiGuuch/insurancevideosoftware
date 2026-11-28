@@ -1,0 +1,40 @@
+#!/bin/bash
+set -u
+umask 077
+resources="$(cd "$(dirname "$0")/../Resources" && pwd -P)" || exit 1
+session="$(mktemp -d "${TMPDIR:-/tmp}/VideoActivityReview.XXXXXXXX")" || exit 1
+log="$session/startup.log"
+child=
+cleanup() {
+  if [[ -n "$child" ]]; then
+    kill "$child" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  rm -f "$log"
+  rmdir "$session"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+/bin/bash "$resources/Start Video Activity Review.command" >"$log" 2>&1 &
+child=$!
+/usr/bin/osascript -e 'display notification "Preparing the local review window. First launch downloads a runtime." with title "Video Activity Review"' >/dev/null 2>&1
+url=
+while kill -0 "$child" 2>/dev/null; do
+  url="$(/usr/bin/sed -n 's/^Video Activity Review is open at \(http:\/\/127\.0\.0\.1:[0-9][0-9]*\)$/\1/p' "$log")"
+  [[ -n "$url" ]] && break
+  /bin/sleep 0.3
+done
+if [[ -z "$url" ]]; then
+  detail="$(/usr/bin/tail -c 1200 "$log")"
+  /usr/bin/osascript - "$detail" <<'APPLESCRIPT'
+on run argv
+  display alert "Video Activity Review could not start" message (item 1 of argv) as critical
+end run
+APPLESCRIPT
+  exit 1
+fi
+while kill -0 "$child" 2>/dev/null; do
+  choice="$(/usr/bin/osascript -e 'button returned of (display dialog "Review is running in your browser. Save your review before quitting." with title "Video Activity Review" buttons {"Quit", "Open review"} default button "Open review")')" || break
+  [[ "$choice" == "Open review" ]] || break
+  /usr/bin/open "$url"
+done

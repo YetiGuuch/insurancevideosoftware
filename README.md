@@ -11,19 +11,14 @@ to create the executable.
 
 ## Run on Mac
 
-Use macOS Sonoma 14 or newer. Extract the Mac ZIP, then double-click
-**Start Video Activity Review.command**. If you are running from source, keep
-the launcher beside `index.html`, `server.mjs`, and `engine.mjs`. From that
-folder, you can also run:
+Download [VideoActivityReview-Mac.zip](./VideoActivityReview-Mac.zip) on macOS Sonoma 14 or newer.
+Double-click the ZIP, then double-click **Video Activity Review**. You can drag the app to
+**Applications** to keep it handy. On first launch the app downloads its runtime and opens
+your browser. Existing installations reuse the downloaded model. Use **Open review** to reopen
+the browser or **Quit** in the launcher after saving your work.
 
-```bash
-/bin/bash "./Start Video Activity Review.command"
-```
-
-The launcher downloads its runtime on first launch and opens your browser.
-Keep the Terminal window open while you work. Press **Control-C** there to
-exit. The Mac build runs on Apple silicon or Intel. Intel analysis runs on
-the CPU and can be slower.
+The app is unsigned. If macOS blocks the first launch, see [Apple's instructions for opening a trusted app](https://support.apple.com/guide/mac-help/mh40616/mac).
+To build the Mac ZIP from source, run `python3 tools/build_mac.py VideoActivityReview-Mac.zip`.
 
 ## Analyze a video
 
@@ -96,7 +91,7 @@ insurance review.
 If the review tab loses its connection, start the EXE again or select **Open
 review window** in the running launcher. Select your video again in the new
 tab. Save the review in the old tab and open that file in the new tab.
-On Windows, select **Exit** in the launcher when you're finished. On Mac, press **Control-C** in the launcher's Terminal window.
+On Windows, select **Exit** in the launcher when you're finished. On Mac, click **Quit** in the launcher.
 
 ## Build from source
 
