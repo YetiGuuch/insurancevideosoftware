@@ -70,7 +70,9 @@ are flagged for replay.
 Timestamps are relative to the start of playback. Use **Show segments without
 a clear action** to see quieter segments in the timeline. The text report
 covers every completed segment and groups consecutive quiet segments with the same result.
-Identical sampled frames are marked unchanged.
+The app estimates an exposure adjustment for the analysis frames. You replay the original video.
+If most samples have too little light, highlight detail, or contrast, the note reads
+**Lighting obscures movement**. Visible frozen frames are marked unchanged.
 
 The report records the claimant label you selected. With clothing cues, the
 app can flag a possible match for that claimant. With the clothing fields left
